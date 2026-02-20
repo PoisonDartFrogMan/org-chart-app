@@ -10,21 +10,28 @@ export const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'T
     const isHorizontal = direction === 'LR';
     dagreGraph.setGraph({ rankdir: direction });
 
-    nodes.forEach((node) => {
+    const visibleNodes = nodes.filter(n => !n.hidden);
+    const visibleEdges = edges.filter(e => !e.hidden);
+
+    visibleNodes.forEach((node) => {
         // ノードの予想される幅・高さを設定
         const width = node.type === 'organization' ? 150 : 200;
         const height = node.type === 'organization' ? 80 : 100;
         dagreGraph.setNode(node.id, { width, height });
     });
 
-    edges.forEach((edge) => {
+    visibleEdges.forEach((edge) => {
         dagreGraph.setEdge(edge.source, edge.target);
     });
 
     dagre.layout(dagreGraph);
 
     const newNodes = nodes.map((node) => {
+        if (node.hidden) return node;
+
         const nodeWithPosition = dagreGraph.node(node.id);
+        if (!nodeWithPosition) return node;
+
         const width = node.type === 'organization' ? 150 : 200;
         const height = node.type === 'organization' ? 80 : 100;
 

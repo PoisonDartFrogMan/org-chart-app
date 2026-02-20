@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -13,7 +13,8 @@ import type { Connection, Edge, Node } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { toPng, toJpeg } from 'html-to-image';
 import jsPDF from 'jspdf';
-import { Download, Cloud, CloudDownload, GitCommitVertical } from 'lucide-react';
+import { Download, Cloud, CloudDownload, GitCommitVertical, Search, FileDown } from 'lucide-react';
+import Papa from 'papaparse';
 
 import { Sidebar } from './components/Sidebar';
 import { OrganizationNode } from './nodes/OrganizationNode';
@@ -47,6 +48,111 @@ function Flow() {
   const [reactFlowInstance, setReactFlowInstance] = useState<any>(null);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('TB');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [collapsedNodes, setCollapsedNodes] = useState<Record<string, boolean>>({});
+
+  const edgesRef = useRef(edges);
+  useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  const layoutDirectionRef = useRef(layoutDirection);
+  useEffect(() => { layoutDirectionRef.current = layoutDirection; }, [layoutDirection]);
+
+  const toggleNodeCollapse = useCallback((nodeId: string) => {
+    setCollapsedNodes((prev) => {
+      const isCollapsed = !prev[nodeId];
+      const newCollapsedNodes = { ...prev, [nodeId]: isCollapsed };
+
+      const currentEdges = edgesRef.current;
+      const currentDir = layoutDirectionRef.current;
+
+      const childrenMap: Record<string, string[]> = {};
+      currentEdges.forEach((e) => {
+        if (!childrenMap[e.source]) childrenMap[e.source] = [];
+        childrenMap[e.source].push(e.target);
+      });
+
+      const hiddenNodeIds = new Set<string>();
+      const hideDescendants = (nId: string) => {
+        const children = childrenMap[nId] || [];
+        children.forEach((childId) => {
+          hiddenNodeIds.add(childId);
+          hideDescendants(childId);
+        });
+      };
+
+      Object.entries(newCollapsedNodes).forEach(([nId, collapsed]) => {
+        if (collapsed) hideDescendants(nId);
+      });
+
+      setNodes((nds) => {
+        const nextNodes = nds.map((node) => ({
+          ...node,
+          hidden: hiddenNodeIds.has(node.id),
+          data: { ...node.data, isCollapsed: !!newCollapsedNodes[node.id] }
+        }));
+
+        const { nodes: layoutedNodes } = getLayoutedElements(nextNodes, currentEdges, currentDir);
+        return layoutedNodes;
+      });
+
+      setEdges((eds) =>
+        eds.map((edge) => ({
+          ...edge,
+          hidden: hiddenNodeIds.has(edge.source) || hiddenNodeIds.has(edge.target) || !!newCollapsedNodes[edge.source]
+        }))
+      );
+
+      return newCollapsedNodes;
+    });
+
+    setTimeout(() => {
+      if (reactFlowInstance) reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
+    }, 50);
+
+  }, [setNodes, setEdges, reactFlowInstance]);
+
+  // Update nodes with hasChildren and onToggleCollapse
+  useEffect(() => {
+    const childrenMap: Record<string, boolean> = {};
+    edges.forEach((e) => {
+      childrenMap[e.source] = true;
+    });
+
+    setNodes((nds) => {
+      let changed = false;
+      const nextNodes = nds.map((node) => {
+        const hasChildren = !!childrenMap[node.id];
+        const isCollapsed = !!collapsedNodes[node.id];
+        if (node.data.hasChildren !== hasChildren || node.data.isCollapsed !== isCollapsed || typeof node.data.onToggleCollapse !== 'function') {
+          changed = true;
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              hasChildren,
+              isCollapsed,
+              onToggleCollapse: () => toggleNodeCollapse(node.id)
+            }
+          };
+        }
+        return node;
+      });
+      return changed ? nextNodes : nds;
+    });
+  }, [edges, collapsedNodes, setNodes, toggleNodeCollapse]);
+
+  // 検索クエリが変更されたらすべてのノードのdataに反映する
+  useEffect(() => {
+    setNodes((nds) =>
+      nds.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          searchQuery
+        }
+      }))
+    );
+  }, [searchQuery, setNodes]);
 
   const onConnect = useCallback(
     (params: Connection | Edge) => setEdges((eds) => addEdge({ ...params, animated: true }, eds)),
@@ -81,8 +187,8 @@ function Flow() {
         position,
         data:
           type === 'organization'
-            ? { label: '新規組織' }
-            : { name: '新規メンバー', role: '役職', department: '', gender: '', age: '' },
+            ? { label: '新規組織', searchQuery }
+            : { name: '新規メンバー', role: '役職', department: '', gender: '', age: '', searchQuery },
       };
 
       setNodes((nds) => nds.concat(newNode));
@@ -106,7 +212,16 @@ function Flow() {
         layoutDirection
       );
 
-      setNodes(layoutedNodes);
+      // 追加するノードにも現在の検索クエリ状態を付与する
+      const nodesWithSearch = layoutedNodes.map(node => ({
+        ...node,
+        data: {
+          ...node.data,
+          searchQuery
+        }
+      }));
+
+      setNodes(nodesWithSearch);
       setEdges(layoutedEdges);
 
       // フィットビューを少し遅延させて実行する
@@ -193,6 +308,38 @@ function Flow() {
       });
   }, []);
 
+  const exportToCsv = useCallback(() => {
+    const managerMap: Record<string, string> = {};
+    edges.forEach(edge => {
+      managerMap[edge.target] = edge.source;
+    });
+
+    const csvData = nodes.map(node => {
+      const isPerson = node.type === 'person';
+      return {
+        'ID': node.id,
+        '氏名': isPerson ? node.data.name : (node.data.label || ''),
+        '役職': isPerson ? node.data.role : '',
+        '部門': isPerson ? (node.data.department || '') : '',
+        '性別': isPerson ? (node.data.gender || '') : '',
+        '年齢': isPerson ? (node.data.age || '') : '',
+        '上司ID': managerMap[node.id] || ''
+      };
+    });
+
+    const csvString = Papa.unparse(csvData);
+
+    // Add BOM for Excel compatibility (UTF-8)
+    const blob = new Blob(['\uFEFF' + csvString], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `org-chart-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [nodes, edges]);
+
   const saveToCloud = async () => {
     if (!db) {
       alert("Firebase is not configured yet. Please update src/firebase.ts");
@@ -242,7 +389,27 @@ function Flow() {
         <h1 className="text-xl font-bold text-gray-800 whitespace-nowrap mr-4">組織図ツール</h1>
 
         <div className="flex gap-2 items-center flex-nowrap">
+          {/* 検索窓 */}
+          <div className="flex items-center gap-2 border-r border-gray-300 pr-4 mr-2 relative">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3" />
+            <input
+              type="text"
+              placeholder="氏名や役職で検索..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 pr-3 py-2 w-48 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-gray-800"
+            />
+          </div>
+
           <div className="flex items-center gap-2 border-r border-gray-300 pr-4 mr-2">
+            <button
+              onClick={exportToCsv}
+              className="flex items-center gap-2 bg-green-50 text-green-700 hover:bg-green-100 border border-green-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
+              title="CSV形式でエクスポート"
+            >
+              <FileDown className="w-4 h-4" />
+              CSV出力
+            </button>
             <CsvImporter onImport={handleCsvImport} />
             <button
               onClick={toggleLayout}
