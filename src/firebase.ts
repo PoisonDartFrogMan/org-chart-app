@@ -1,15 +1,15 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore, Firestore } from 'firebase/firestore';
 
-// TODO: マスターからのfirebaseConfigをここに設定してください
-// 現在はマスターが入力するまでのプレースホルダーです
+// Firebase設定（マスターの提供データ）
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_AUTH_DOMAIN",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_STORAGE_BUCKET",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_APP_ID"
+    apiKey: "AIzaSyBWo3RgEwLycrvfR1qvniHsh1yJp5ZEyGw",
+    authDomain: "org-chart-app-3de0c.firebaseapp.com",
+    projectId: "org-chart-app-3de0c",
+    storageBucket: "org-chart-app-3de0c.firebasestorage.app",
+    messagingSenderId: "790762111600",
+    appId: "1:790762111600:web:280597bc21772caac96ab5",
+    measurementId: "G-JVNE9CNH8K"
 };
 
 // initializeAppは設定が有効な時だけ実行するようにガードを入れるか、
