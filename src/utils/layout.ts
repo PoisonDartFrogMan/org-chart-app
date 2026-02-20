@@ -80,6 +80,7 @@ export const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'T
 
     dagre.layout(dagreGraph);
 
+    // Dagre returns absolute positions. Convert back to relative positions for child nodes.
     const newNodes = nodes.map((node) => {
         if (node.hidden) return node;
 
@@ -89,19 +90,41 @@ export const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'T
         const width = node.type === 'organization' ? 150 : 200;
         const height = node.type === 'organization' ? 80 : 100;
 
-        // dagreは中心座標を返すため、左上基準に補正
-        const newNode = {
+        let absolutePosition = {
+            x: nodeWithPosition.x - width / 2,
+            y: nodeWithPosition.y - height / 2,
+        };
+
+        let finalPosition = absolutePosition;
+
+        // If the node has a parentId, it needs relative coordinates based on the parent's absolute coordinates calculated by Dagre.
+        if (node.parentId) {
+            const parentDagreNode = dagreGraph.node(node.parentId);
+            if (parentDagreNode) {
+                const parentWidth = nodes.find(n => n.id === node.parentId)?.type === 'organization' ? 150 : 200;
+                const parentHeight = nodes.find(n => n.id === node.parentId)?.type === 'organization' ? 80 : 100;
+
+                const parentAbsolutePosition = {
+                    x: parentDagreNode.x - parentWidth / 2,
+                    y: parentDagreNode.y - parentHeight / 2,
+                };
+
+                finalPosition = {
+                    x: absolutePosition.x - parentAbsolutePosition.x,
+                    y: absolutePosition.y - parentAbsolutePosition.y
+                };
+            }
+        }
+
+        const newNode: Node = {
             ...node,
             targetPosition: isHorizontal ? Position.Left : Position.Top,
             sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
-            position: {
-                x: nodeWithPosition.x - width / 2,
-                y: nodeWithPosition.y - height / 2,
-            },
+            position: finalPosition,
         };
 
         return newNode;
     });
 
-    return { nodes: newNodes as Node[], edges };
+    return { nodes: newNodes, edges };
 };

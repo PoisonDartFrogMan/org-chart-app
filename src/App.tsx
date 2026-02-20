@@ -184,22 +184,75 @@ function Flow() {
 
   }, [setNodes, setEdges, reactFlowInstance, takeSnapshot]);
 
-  // Update nodes with hasChildren and onToggleCollapse
+  // Update nodes with hasChildren, onToggleCollapse, and parentNode logic
   useEffect(() => {
     const childrenMap: Record<string, boolean> = {};
+    const parentMap: Record<string, string> = {}; // どの子がどの親に属するかを記録
+
     edges.forEach((e) => {
       childrenMap[e.source] = true;
+      parentMap[e.target] = e.source;
     });
 
     setNodes((nds) => {
       let changed = false;
+
+      // 現在のすべてのノードの絶対座標をマップ化（parentNode 計算用）
+      // すでに parentNode がある場合は、親の絶対座標を足して絶対座標を復元する
+      const absPosMap = new Map<string, { x: number; y: number }>();
+
+      // まずは親（parentIdを持たないノード）の絶対座標を記録
+      nds.forEach((n) => {
+        if (!n.parentId) {
+          absPosMap.set(n.id, { x: n.position.x, y: n.position.y });
+        }
+      });
+      // 次に子（parentIdを持つノード）の絶対座標を計算して記録（再起的な階層は浅いと仮定）
+      nds.forEach((n) => {
+        if (n.parentId) {
+          const pPos = absPosMap.get(n.parentId) || { x: 0, y: 0 };
+          absPosMap.set(n.id, { x: pPos.x + n.position.x, y: pPos.y + n.position.y });
+        }
+      });
+
       const nextNodes = nds.map((node) => {
         const hasChildren = !!childrenMap[node.id];
         const isCollapsed = !!collapsedNodes[node.id];
-        if (node.data.hasChildren !== hasChildren || node.data.isCollapsed !== isCollapsed || typeof node.data.onToggleCollapse !== 'function') {
+        const newParentNode = parentMap[node.id];
+
+        let newPosition = node.position;
+        let parentChanged = false;
+
+        if (node.parentId !== newParentNode) {
+          parentChanged = true;
+          changed = true;
+          // 親が変わる、あるいは新しく親が設定される/外れる場合の座標補正
+          const myAbs = absPosMap.get(node.id) || node.position;
+
+          if (newParentNode) {
+            // 親が設定された場合、自身の相対座標 = 自身の絶対座標 - 新しい親の絶対座標
+            const newParentAbs = absPosMap.get(newParentNode) || { x: 0, y: 0 };
+            newPosition = {
+              x: myAbs.x - newParentAbs.x,
+              y: myAbs.y - newParentAbs.y,
+            };
+          } else {
+            // 親が外れた場合、現在の絶対座標をそのまま position として使用
+            newPosition = { ...myAbs };
+          }
+        }
+
+        if (
+          parentChanged ||
+          node.data.hasChildren !== hasChildren ||
+          node.data.isCollapsed !== isCollapsed ||
+          typeof node.data.onToggleCollapse !== 'function'
+        ) {
           changed = true;
           return {
             ...node,
+            parentId: newParentNode,
+            position: newPosition, // parentChanged時のみ相対/絶対補正された座標になる
             data: {
               ...node.data,
               hasChildren,
@@ -398,7 +451,31 @@ function Flow() {
     const extension = format === 'png' ? 'png' : 'jpg';
 
     action(reactFlowWrapper.current, options)
-      .then((dataUrl) => {
+      .then(async (dataUrl) => {
+        // use showSaveFilePicker if available
+        if ('showSaveFilePicker' in window) {
+          try {
+            const res = await fetch(dataUrl);
+            const blob = await res.blob();
+            const fileHandle = await (window as any).showSaveFilePicker({
+              suggestedName: `org-chart.${extension}`,
+              types: [{
+                description: `${format.toUpperCase()} Image`,
+                accept: { [`image/${extension}`]: [`.${extension}`] },
+              }],
+            });
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            return;
+          } catch (err) {
+            // User cancelled or error, fallback or do nothing
+            // AbortError is thrown when user cancels the dialog
+            if ((err as Error).name === 'AbortError') return;
+            console.error('File picker error:', err);
+          }
+        }
+        // Fallback
         const link = document.createElement('a');
         link.download = `org-chart.${extension}`;
         link.href = dataUrl;
@@ -422,13 +499,34 @@ function Flow() {
       backgroundColor: '#f3f4f6',
       style: { transform: 'translate(0, 0)' }
     })
-      .then((dataUrl) => {
+      .then(async (dataUrl) => {
         const pdf = new jsPDF({
           orientation: width > height ? 'landscape' : 'portrait',
           unit: 'px',
           format: [width, height],
         });
         pdf.addImage(dataUrl, 'PNG', 0, 0, width, height);
+
+        if ('showSaveFilePicker' in window) {
+          try {
+            const blob = pdf.output('blob');
+            const fileHandle = await (window as any).showSaveFilePicker({
+              suggestedName: 'org-chart.pdf',
+              types: [{
+                description: 'PDF Document',
+                accept: { 'application/pdf': ['.pdf'] },
+              }],
+            });
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            return;
+          } catch (err) {
+            if ((err as Error).name === 'AbortError') return;
+            console.error('File picker error:', err);
+          }
+        }
+        // Fallback
         pdf.save('org-chart.pdf');
       })
       .catch((err) => {
@@ -459,13 +557,38 @@ function Flow() {
 
     // Add BOM for Excel compatibility (UTF-8)
     const blob = new Blob(['\uFEFF' + csvString], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `org-chart-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const saveCsv = async () => {
+      if ('showSaveFilePicker' in window) {
+        try {
+          const fileHandle = await (window as any).showSaveFilePicker({
+            suggestedName: `org-chart-${new Date().toISOString().slice(0, 10)}.csv`,
+            types: [{
+              description: 'CSV File',
+              accept: { 'text/csv': ['.csv'] },
+            }],
+          });
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return;
+        } catch (err) {
+          if ((err as Error).name === 'AbortError') return;
+          console.error('File picker error:', err);
+        }
+      }
+
+      // Fallback
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `org-chart-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+    };
+
+    saveCsv();
   }, [nodes, edges]);
 
   const saveToCloud = async () => {
