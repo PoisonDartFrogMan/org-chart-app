@@ -27,6 +27,7 @@ export function CsvImporter({ onImport }: CsvImporterProps) {
         Papa.parse<CsvRow>(file, {
             header: true,
             skipEmptyLines: true,
+            transformHeader: (header) => header.trim().replace(/^\uFEFF/g, ''),
             complete: (results) => {
                 const nodes: Node[] = [];
                 const edges: Edge[] = [];
@@ -34,12 +35,17 @@ export function CsvImporter({ onImport }: CsvImporterProps) {
                 results.data.forEach((row) => {
                     if (!row.ID || !row.氏名) return; // IDと氏名は必須とする
 
+                    const isOrganization = !row.役職 && !row.部門 && !row.性別 && !row.年齢 && (!row.上司ID || row.上司ID.trim() === '');
+                    const type = isOrganization ? 'organization' : 'person';
+
                     // ノードの作成
                     nodes.push({
                         id: row.ID,
-                        type: 'person',
+                        type: type,
                         position: { x: 0, y: 0 }, // 座表は後のdagreレイアウトで計算される
-                        data: {
+                        data: type === 'organization' ? {
+                            label: row.氏名
+                        } : {
                             name: row.氏名,
                             role: row.役職 || '',
                             department: row.部門 || '',

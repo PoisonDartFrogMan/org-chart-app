@@ -1,7 +1,9 @@
 @import "tailwindcss";
 @import "@xyflow/react/dist/style.css";
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   padding: 0;
@@ -10,6 +12,3 @@ html, body, #root {
 }
 
 /* 組織図ノードのカスタムスタイル (Tailwindでクラス付与できない要素などがあればここに記述) */
-.react-flow__node {
-  /* ノードのデフォルトのアウトラインなどをリセット */
-}
