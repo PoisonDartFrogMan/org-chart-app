@@ -597,18 +597,49 @@ function Flow() {
       return;
     }
     try {
+      // Helper function to sanitize data for Firestore (remove functions and undefined)
+      const sanitizeData = (obj: any): any => {
+        if (obj === null || typeof obj === 'undefined') return null;
+        if (typeof obj === 'function') return null; // Convert functions to null or omit them later
+        if (Array.isArray(obj)) {
+          return obj.map(sanitizeData).filter(item => item !== null);
+        }
+        if (typeof obj === 'object') {
+          const sanitized: any = {};
+          for (const key in obj) {
+            if (Object.prototype.hasOwnProperty.call(obj, key)) {
+              if (typeof obj[key] === 'function' || typeof obj[key] === 'undefined') continue; // omit functions and undefined completely
+              sanitized[key] = sanitizeData(obj[key]);
+            }
+          }
+          return sanitized;
+        }
+        return obj;
+      };
+
+      const sanitizedNodes = sanitizeData(nodes);
+      const sanitizedEdges = sanitizeData(edges);
+
       const { doc, setDoc } = await import('firebase/firestore');
       await setDoc(doc(db, 'org_charts', 'master'), {
-        nodes,
-        edges,
+        nodes: sanitizedNodes,
+        edges: sanitizedEdges,
         layoutDirection,
         roles,
         updatedAt: new Date().toISOString()
       });
       alert("クラウドに保存しました！");
-    } catch (err) {
-      console.error(err);
-      alert("保存に失敗しました。");
+    } catch (err: any) {
+      console.error('Firebase save error:', err);
+      // Generate a more user-friendly error message
+      let errorMessage = "保存に失敗しました。";
+      if (err.message) {
+        errorMessage += `\n詳細: ${err.message}`;
+        if (err.message.includes('missing or insufficient permissions')) {
+          errorMessage += "\n※Firestore ルールの権限エラーが発生しています。「ルール」タブを確認してください。";
+        }
+      }
+      alert(errorMessage);
     }
   };
 
