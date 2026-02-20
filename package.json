@@ -11,9 +11,12 @@
   },
   "dependencies": {
     "@xyflow/react": "^12.10.1",
+    "dagre": "^0.8.5",
+    "firebase": "^12.9.0",
     "html-to-image": "^1.11.13",
     "jspdf": "^4.2.0",
     "lucide-react": "^0.575.0",
+    "papaparse": "^5.5.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "reactflow": "^11.11.4",
@@ -22,7 +25,9 @@
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@tailwindcss/vite": "^4.2.0",
+    "@types/dagre": "^0.7.53",
     "@types/node": "^24.10.1",
+    "@types/papaparse": "^5.5.2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@types/uuid": "^10.0.0",
