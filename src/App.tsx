@@ -23,10 +23,15 @@ import { db } from './firebase'; // To be implemented later
 import { CsvImporter } from './components/CsvImporter';
 import { DetailsPanel } from './components/DetailsPanel';
 import { getLayoutedElements } from './utils/layout';
+import DeletableEdge from './edges/DeletableEdge';
 
 const nodeTypes = {
   organization: OrganizationNode,
   person: PersonNode,
+};
+
+const edgeTypes = {
+  deletable: DeletableEdge,
 };
 
 const initialNodes: Node[] = [
@@ -155,7 +160,7 @@ function Flow() {
   }, [searchQuery, setNodes]);
 
   const onConnect = useCallback(
-    (params: Connection | Edge) => setEdges((eds) => addEdge({ ...params, animated: true }, eds)),
+    (params: Connection | Edge) => setEdges((eds) => addEdge({ ...params, type: 'deletable', animated: true }, eds)),
     [setEdges],
   );
 
@@ -476,10 +481,11 @@ function Flow() {
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             fitView
             snapToGrid
             snapGrid={[15, 15]}
-            defaultEdgeOptions={{ animated: false }}
+            defaultEdgeOptions={{ type: 'deletable', animated: false }}
           >
             <Controls />
             <MiniMap />

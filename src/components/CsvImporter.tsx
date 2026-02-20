@@ -54,6 +54,7 @@ export function CsvImporter({ onImport }: CsvImporterProps) {
                             id: `edge_${row.上司ID}_${row.ID}`,
                             source: row.上司ID,
                             target: row.ID,
+                            type: 'deletable',
                             animated: true,
                         });
                     }
