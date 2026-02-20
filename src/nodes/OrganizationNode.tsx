@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Handle, Position, useReactFlow, useNodeId, NodeResizer } from '@xyflow/react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useHistory } from '../contexts/HistoryContext';
 
 export function OrganizationNode({ data, selected }: { data: { label: string; searchQuery?: string; hasChildren?: boolean; isCollapsed?: boolean; onToggleCollapse?: () => void }, selected?: boolean }) {
     const isMatch = !!data.searchQuery && data.label.toLowerCase().includes(data.searchQuery.toLowerCase());
@@ -9,6 +10,7 @@ export function OrganizationNode({ data, selected }: { data: { label: string; se
     const { setNodes } = useReactFlow();
     const nodeId = useNodeId();
     const inputRef = useRef<HTMLInputElement>(null);
+    const { takeSnapshot } = useHistory();
 
     useEffect(() => {
         if (isEditing && inputRef.current) {
@@ -20,6 +22,7 @@ export function OrganizationNode({ data, selected }: { data: { label: string; se
     const onSave = () => {
         setIsEditing(false);
         if (editValue.trim() !== '' && editValue !== data.label && nodeId) {
+            takeSnapshot();
             setNodes((nds) =>
                 nds.map((n) => {
                     if (n.id === nodeId) {

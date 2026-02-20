@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Handle, Position, useReactFlow, useNodeId, NodeResizer } from '@xyflow/react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useHistory } from '../contexts/HistoryContext';
 
 interface PersonData {
     name: string;
@@ -26,6 +27,7 @@ export function PersonNode({ data, selected }: { data: PersonData, selected?: bo
     const { setNodes } = useReactFlow();
     const nodeId = useNodeId();
     const inputRef = useRef<HTMLInputElement>(null);
+    const { takeSnapshot } = useHistory();
 
     useEffect(() => {
         if (editingField !== 'none' && inputRef.current) {
@@ -47,6 +49,7 @@ export function PersonNode({ data, selected }: { data: PersonData, selected?: bo
         setEditingField('none');
 
         if (newValue !== data[fieldToUpdate] && nodeId) {
+            takeSnapshot();
             setNodes((nds) =>
                 nds.map((n) => {
                     if (n.id === nodeId) {

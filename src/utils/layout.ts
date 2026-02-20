@@ -2,7 +2,7 @@ import dagre from 'dagre';
 import { Position } from '@xyflow/react';
 import type { Node, Edge } from '@xyflow/react';
 
-export const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => {
+export const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB', roles: string[] = []) => {
     const dagreGraph = new dagre.graphlib.Graph();
     dagreGraph.setDefaultEdgeLabel(() => ({}));
 
@@ -20,8 +20,40 @@ export const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'T
         dagreGraph.setNode(node.id, { width, height });
     });
 
+    const parentMap: Record<string, string> = {};
+    edges.forEach((edge) => {
+        parentMap[edge.target] = edge.source;
+    });
+
+    const childrenByParent: Record<string, Node[]> = {};
+    visibleNodes.forEach((node) => {
+        const parentId = parentMap[node.id];
+        if (parentId) {
+            if (!childrenByParent[parentId]) childrenByParent[parentId] = [];
+            childrenByParent[parentId].push(node);
+        }
+    });
+
+    const getRank = (n: Node) => {
+        if (n.type !== 'person' || !n.data.role) return 999;
+        const idx = roles.indexOf(String(n.data.role));
+        return idx === -1 ? 999 : idx;
+    };
+
+    const edgeMinLens = new Map<string, number>();
+
+    Object.values(childrenByParent).forEach((children) => {
+        const ranks = Array.from(new Set(children.map(getRank))).sort((a, b) => a - b);
+        children.forEach((child) => {
+            const childRank = getRank(child);
+            const rankIndex = ranks.indexOf(childRank);
+            edgeMinLens.set(child.id, rankIndex + 1);
+        });
+    });
+
     visibleEdges.forEach((edge) => {
-        dagreGraph.setEdge(edge.source, edge.target);
+        const minlen = edgeMinLens.get(edge.target) || 1;
+        dagreGraph.setEdge(edge.source, edge.target, { minlen });
     });
 
     dagre.layout(dagreGraph);

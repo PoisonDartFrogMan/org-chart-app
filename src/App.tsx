@@ -13,7 +13,7 @@ import type { Connection, Edge, Node } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { toPng, toJpeg } from 'html-to-image';
 import jsPDF from 'jspdf';
-import { Download, Cloud, CloudDownload, GitCommitVertical, Search, FileDown } from 'lucide-react';
+import { Download, Cloud, CloudDownload, GitCommitVertical, Search, FileDown, Undo2, Redo2, Network, Settings } from 'lucide-react';
 import Papa from 'papaparse';
 
 import { Sidebar } from './components/Sidebar';
@@ -24,6 +24,8 @@ import { CsvImporter } from './components/CsvImporter';
 import { DetailsPanel } from './components/DetailsPanel';
 import { getLayoutedElements } from './utils/layout';
 import DeletableEdge from './edges/DeletableEdge';
+import { HistoryContext } from './contexts/HistoryContext';
+import { RoleSettingsModal } from './components/RoleSettingsModal';
 
 const nodeTypes = {
   organization: OrganizationNode,
@@ -56,6 +58,75 @@ function Flow() {
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedNodes, setCollapsedNodes] = useState<Record<string, boolean>>({});
 
+  const [roles, setRoles] = useState<string[]>(['社長', '役員', '本部長', '部長', '課長', '主任', '一般']);
+  const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
+
+  const [past, setPast] = useState<{ nodes: Node[]; edges: Edge[] }[]>([]);
+  const [future, setFuture] = useState<{ nodes: Node[]; edges: Edge[] }[]>([]);
+
+  const takeSnapshot = useCallback(() => {
+    setPast((p) => {
+      const clonedNodes = nodes.map(n => ({ ...n, data: { ...n.data } }));
+      const clonedEdges = edges.map(e => ({ ...e, data: { ...e.data } }));
+      return [...p.slice(-50), { nodes: clonedNodes, edges: clonedEdges }];
+    });
+    setFuture([]);
+  }, [nodes, edges]);
+
+  const undo = useCallback(() => {
+    setPast((p) => {
+      if (p.length === 0) return p;
+      const previous = p[p.length - 1];
+      const clonedNodes = nodes.map(n => ({ ...n, data: { ...n.data } }));
+      const clonedEdges = edges.map(e => ({ ...e, data: { ...e.data } }));
+      setFuture((f) => [{ nodes: clonedNodes, edges: clonedEdges }, ...f]);
+      setNodes(previous.nodes);
+      setEdges(previous.edges);
+      return p.slice(0, p.length - 1);
+    });
+  }, [nodes, edges, setNodes, setEdges]);
+
+  const redo = useCallback(() => {
+    setFuture((f) => {
+      if (f.length === 0) return f;
+      const next = f[0];
+      const clonedNodes = nodes.map(n => ({ ...n, data: { ...n.data } }));
+      const clonedEdges = edges.map(e => ({ ...e, data: { ...e.data } }));
+      setPast((p) => [...p, { nodes: clonedNodes, edges: clonedEdges }]);
+      setNodes(next.nodes);
+      setEdges(next.edges);
+      return f.slice(1);
+    });
+  }, [nodes, edges, setNodes, setEdges]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo]);
+
+  const handleNodesChange = useCallback((changes: any[]) => {
+    if (changes.some(c => c.type === 'remove')) takeSnapshot();
+    onNodesChange(changes);
+  }, [onNodesChange, takeSnapshot]);
+
+  const handleEdgesChange = useCallback((changes: any[]) => {
+    if (changes.some(c => c.type === 'remove')) takeSnapshot();
+    onEdgesChange(changes);
+  }, [onEdgesChange, takeSnapshot]);
+
   const edgesRef = useRef(edges);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
 
@@ -63,12 +134,12 @@ function Flow() {
   useEffect(() => { layoutDirectionRef.current = layoutDirection; }, [layoutDirection]);
 
   const toggleNodeCollapse = useCallback((nodeId: string) => {
+    takeSnapshot();
     setCollapsedNodes((prev) => {
       const isCollapsed = !prev[nodeId];
       const newCollapsedNodes = { ...prev, [nodeId]: isCollapsed };
 
       const currentEdges = edgesRef.current;
-      const currentDir = layoutDirectionRef.current;
 
       const childrenMap: Record<string, string[]> = {};
       currentEdges.forEach((e) => {
@@ -90,14 +161,11 @@ function Flow() {
       });
 
       setNodes((nds) => {
-        const nextNodes = nds.map((node) => ({
+        return nds.map((node) => ({
           ...node,
           hidden: hiddenNodeIds.has(node.id),
           data: { ...node.data, isCollapsed: !!newCollapsedNodes[node.id] }
         }));
-
-        const { nodes: layoutedNodes } = getLayoutedElements(nextNodes, currentEdges, currentDir);
-        return layoutedNodes;
       });
 
       setEdges((eds) =>
@@ -114,7 +182,7 @@ function Flow() {
       if (reactFlowInstance) reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
     }, 50);
 
-  }, [setNodes, setEdges, reactFlowInstance]);
+  }, [setNodes, setEdges, reactFlowInstance, takeSnapshot]);
 
   // Update nodes with hasChildren and onToggleCollapse
   useEffect(() => {
@@ -160,8 +228,11 @@ function Flow() {
   }, [searchQuery, setNodes]);
 
   const onConnect = useCallback(
-    (params: Connection | Edge) => setEdges((eds) => addEdge({ ...params, type: 'deletable', animated: true }, eds)),
-    [setEdges],
+    (params: Connection | Edge) => {
+      takeSnapshot();
+      setEdges((eds) => addEdge({ ...params, type: 'deletable', animated: true }, eds));
+    },
+    [setEdges, takeSnapshot],
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -196,9 +267,10 @@ function Flow() {
             : { name: '新規メンバー', role: '役職', department: '', gender: '', age: '', searchQuery },
       };
 
+      takeSnapshot();
       setNodes((nds) => nds.concat(newNode));
     },
-    [reactFlowInstance, setNodes],
+    [reactFlowInstance, setNodes, searchQuery, takeSnapshot],
   );
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
@@ -214,7 +286,8 @@ function Flow() {
       const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
         importedNodes,
         importedEdges,
-        layoutDirection
+        layoutDirection,
+        roles
       );
 
       // 追加するノードにも現在の検索クエリ状態を付与する
@@ -238,13 +311,15 @@ function Flow() {
   );
 
   const toggleLayout = useCallback(() => {
+    takeSnapshot();
     const newDirection = layoutDirection === 'TB' ? 'LR' : 'TB';
     setLayoutDirection(newDirection);
 
     const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
       nodes,
       edges,
-      newDirection
+      newDirection,
+      roles
     );
 
     setNodes([...layoutedNodes]);
@@ -253,7 +328,17 @@ function Flow() {
     setTimeout(() => {
       if (reactFlowInstance) reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
     }, 50);
-  }, [layoutDirection, nodes, edges, setNodes, setEdges, reactFlowInstance]);
+  }, [layoutDirection, nodes, edges, setNodes, setEdges, reactFlowInstance, takeSnapshot]);
+
+  const runAutoLayout = useCallback(() => {
+    takeSnapshot();
+    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(nodes, edges, layoutDirection, roles);
+    setNodes([...layoutedNodes]);
+    setEdges([...layoutedEdges]);
+    setTimeout(() => {
+      if (reactFlowInstance) reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
+    }, 50);
+  }, [nodes, edges, layoutDirection, reactFlowInstance, setNodes, setEdges, takeSnapshot]);
 
   const exportAsImage = useCallback((format: 'png' | 'jpeg') => {
     if (reactFlowWrapper.current === null) {
@@ -356,6 +441,7 @@ function Flow() {
         nodes,
         edges,
         layoutDirection,
+        roles,
         updatedAt: new Date().toISOString()
       });
       alert("クラウドに保存しました！");
@@ -378,6 +464,7 @@ function Flow() {
         if (data.nodes) setNodes(data.nodes);
         if (data.edges) setEdges(data.edges);
         if (data.layoutDirection) setLayoutDirection(data.layoutDirection);
+        if (data.roles) setRoles(data.roles);
         alert("クラウドから読み込みました！");
       } else {
         alert("保存されたデータがありません。");
@@ -389,112 +476,161 @@ function Flow() {
   };
 
   return (
-    <div className="flex flex-col h-screen w-full">
-      <header className="bg-white border-b border-gray-200 p-4 flex justify-between items-center shadow-sm z-10 w-full overflow-x-auto">
-        <h1 className="text-xl font-bold text-gray-800 whitespace-nowrap mr-4">組織図ツール</h1>
+    <HistoryContext.Provider value={{ undo, redo, takeSnapshot, canUndo: past.length > 0, canRedo: future.length > 0 }}>
+      <div className="flex flex-col h-screen w-full">
+        <header className="bg-white border-b border-gray-200 p-4 flex justify-between items-center shadow-sm z-10 w-full overflow-x-auto">
+          <h1 className="text-xl font-bold text-gray-800 whitespace-nowrap mr-4">組織図ツール</h1>
 
-        <div className="flex gap-2 items-center flex-nowrap">
-          {/* 検索窓 */}
-          <div className="flex items-center gap-2 border-r border-gray-300 pr-4 mr-2 relative">
-            <Search className="w-4 h-4 text-gray-400 absolute left-3" />
-            <input
-              type="text"
-              placeholder="氏名や役職で検索..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 pr-3 py-2 w-48 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-gray-800"
-            />
+          <div className="flex gap-2 items-center flex-nowrap">
+            {/* Undo/Redo */}
+            <div className="flex items-center gap-1 border-r border-gray-300 pr-4 mr-2">
+              <button
+                onClick={undo}
+                disabled={past.length === 0}
+                className={`p-2 rounded-md transition-colors ${past.length > 0 ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-300 cursor-not-allowed'}`}
+                title="元に戻す (Cmd+Z)"
+              >
+                <Undo2 className="w-5 h-5" />
+              </button>
+              <button
+                onClick={redo}
+                disabled={future.length === 0}
+                className={`p-2 rounded-md transition-colors ${future.length > 0 ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-300 cursor-not-allowed'}`}
+                title="やり直す (Cmd+Shift+Z)"
+              >
+                <Redo2 className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* 検索窓 */}
+            <div className="flex items-center gap-2 border-r border-gray-300 pr-4 mr-2 relative">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3" />
+              <input
+                type="text"
+                placeholder="氏名や役職で検索..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 pr-3 py-2 w-48 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-gray-800"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 border-r border-gray-300 pr-4 mr-2">
+              <button
+                onClick={() => setIsRoleModalOpen(true)}
+                className="flex items-center gap-2 bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
+                title="役職の定義（階層ルール）"
+              >
+                <Settings className="w-4 h-4" />
+                設定
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 border-r border-gray-300 pr-4 mr-2">
+              <button
+                onClick={runAutoLayout}
+                className="flex items-center gap-2 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
+                title="自動整列（階層ルールに基づいて並び替えます）"
+              >
+                <Network className="w-4 h-4" />
+                自動整列
+              </button>
+              <button
+                onClick={exportToCsv}
+                className="flex items-center gap-2 bg-green-50 text-green-700 hover:bg-green-100 border border-green-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
+                title="CSV形式でエクスポート"
+              >
+                <FileDown className="w-4 h-4" />
+                CSV出力
+              </button>
+              <CsvImporter onImport={handleCsvImport} />
+              <button
+                onClick={toggleLayout}
+                className="flex items-center gap-2 bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
+                title="縦横レイアウトの切り替え"
+              >
+                <GitCommitVertical className="w-4 h-4" />
+                {layoutDirection === 'TB' ? '縦レイアウト' : '横レイアウト'}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 border-r border-gray-300 pr-4 mr-2">
+              <button
+                onClick={saveToCloud}
+                className="flex items-center gap-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
+              >
+                <Cloud className="w-4 h-4" />
+                保存
+              </button>
+              <button
+                onClick={loadFromCloud}
+                className="flex items-center gap-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
+              >
+                <CloudDownload className="w-4 h-4" />
+                読込
+              </button>
+            </div>
+
+            <button
+              onClick={() => exportAsImage('png')}
+              className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
+            >
+              <Download className="w-4 h-4" />
+              PNG
+            </button>
+            <button
+              onClick={() => exportAsImage('jpeg')}
+              className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
+            >
+              <Download className="w-4 h-4" />
+              JPG
+            </button>
+            <button
+              onClick={exportAsPDF}
+              className="flex items-center gap-2 bg-blue-600 text-white hover:bg-blue-700 border border-transparent px-4 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
+            >
+              <Download className="w-4 h-4" />
+              PDF
+            </button>
           </div>
-
-          <div className="flex items-center gap-2 border-r border-gray-300 pr-4 mr-2">
-            <button
-              onClick={exportToCsv}
-              className="flex items-center gap-2 bg-green-50 text-green-700 hover:bg-green-100 border border-green-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
-              title="CSV形式でエクスポート"
+        </header>
+        <div className="flex flex-1 overflow-hidden">
+          <Sidebar />
+          <div className="flex-1 h-full relative" ref={reactFlowWrapper}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={handleNodesChange}
+              onEdgesChange={handleEdgesChange}
+              onConnect={onConnect}
+              onInit={setReactFlowInstance}
+              onDrop={onDrop}
+              onDragOver={onDragOver}
+              onNodeDragStart={() => takeSnapshot()}
+              onNodeClick={onNodeClick}
+              onPaneClick={onPaneClick}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              fitView
+              snapToGrid
+              snapGrid={[15, 15]}
+              defaultEdgeOptions={{ type: 'deletable', animated: false }}
             >
-              <FileDown className="w-4 h-4" />
-              CSV出力
-            </button>
-            <CsvImporter onImport={handleCsvImport} />
-            <button
-              onClick={toggleLayout}
-              className="flex items-center gap-2 bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
-              title="縦横レイアウトの切り替え"
-            >
-              <GitCommitVertical className="w-4 h-4" />
-              {layoutDirection === 'TB' ? '縦レイアウト' : '横レイアウト'}
-            </button>
+              <Controls />
+              <MiniMap />
+              <Background gap={15} size={1} />
+            </ReactFlow>
           </div>
-
-          <div className="flex items-center gap-2 border-r border-gray-300 pr-4 mr-2">
-            <button
-              onClick={saveToCloud}
-              className="flex items-center gap-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
-            >
-              <Cloud className="w-4 h-4" />
-              保存
-            </button>
-            <button
-              onClick={loadFromCloud}
-              className="flex items-center gap-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 px-3 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
-            >
-              <CloudDownload className="w-4 h-4" />
-              読込
-            </button>
-          </div>
-
-          <button
-            onClick={() => exportAsImage('png')}
-            className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
-          >
-            <Download className="w-4 h-4" />
-            PNG
-          </button>
-          <button
-            onClick={() => exportAsImage('jpeg')}
-            className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
-          >
-            <Download className="w-4 h-4" />
-            JPG
-          </button>
-          <button
-            onClick={exportAsPDF}
-            className="flex items-center gap-2 bg-blue-600 text-white hover:bg-blue-700 border border-transparent px-4 py-2 rounded-md shadow-sm text-sm font-medium transition-colors whitespace-nowrap"
-          >
-            <Download className="w-4 h-4" />
-            PDF
-          </button>
+          <DetailsPanel node={selectedNode} />
         </div>
-      </header>
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar />
-        <div className="flex-1 h-full relative" ref={reactFlowWrapper}>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onInit={setReactFlowInstance}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            onNodeClick={onNodeClick}
-            onPaneClick={onPaneClick}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            fitView
-            snapToGrid
-            snapGrid={[15, 15]}
-            defaultEdgeOptions={{ type: 'deletable', animated: false }}
-          >
-            <Controls />
-            <MiniMap />
-            <Background gap={15} size={1} />
-          </ReactFlow>
-        </div>
-        <DetailsPanel node={selectedNode} />
+        {isRoleModalOpen && (
+          <RoleSettingsModal
+            roles={roles}
+            onSave={setRoles}
+            onClose={() => setIsRoleModalOpen(false)}
+          />
+        )}
       </div>
-    </div>
+    </HistoryContext.Provider>
   );
 }
 
