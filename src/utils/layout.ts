@@ -13,8 +13,15 @@ export const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'T
     const visibleNodes = nodes.filter(n => !n.hidden);
     const visibleEdges = edges.filter(e => !e.hidden);
 
-    visibleNodes.forEach((node) => {
-        // ノードの予想される幅・高さを設定
+    const getRank = (n: Node) => {
+        if (n.type !== 'person' || !n.data.role) return 999;
+        const idx = roles.indexOf(String(n.data.role));
+        return idx === -1 ? 999 : idx;
+    };
+
+    // nodes をDagreに登録（ここでソートした順に登録することで、ある程度Dagreの初期配置順に影響を与えられる）
+    const sortedVisibleNodes = [...visibleNodes].sort((a, b) => getRank(a) - getRank(b));
+    sortedVisibleNodes.forEach((node) => {
         const width = node.type === 'organization' ? 150 : 200;
         const height = node.type === 'organization' ? 80 : 100;
         dagreGraph.setNode(node.id, { width, height });
@@ -34,26 +41,41 @@ export const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'T
         }
     });
 
-    const getRank = (n: Node) => {
-        if (n.type !== 'person' || !n.data.role) return 999;
-        const idx = roles.indexOf(String(n.data.role));
-        return idx === -1 ? 999 : idx;
-    };
-
     const edgeMinLens = new Map<string, number>();
 
+    // 親ごとに子ノードを処理
     Object.values(childrenByParent).forEach((children) => {
+        // 縦の階層（minlen）をつける処理
         const ranks = Array.from(new Set(children.map(getRank))).sort((a, b) => a - b);
         children.forEach((child) => {
             const childRank = getRank(child);
             const rankIndex = ranks.indexOf(childRank);
             edgeMinLens.set(child.id, rankIndex + 1);
         });
+
+        // 兄弟間での「横並び」を強制するための見えないエッジ（ダミーエッジ）を追加
+        // 同じ親を持つ子たちをランク順 → 同じランクなら名前順等でソート
+        const sortedChildren = [...children].sort((a, b) => {
+            const rankA = getRank(a);
+            const rankB = getRank(b);
+            if (rankA !== rankB) return rankA - rankB;
+            // ランクが同じならIDでソート（常に同じ並び順を担保するため）
+            return a.id.localeCompare(b.id);
+        });
+
+        // 左から右（または上から下）へ順番に並べるために、兄弟間に weight の高いエッジをこっそり張る
+        for (let i = 0; i < sortedChildren.length - 1; i++) {
+            const current = sortedChildren[i];
+            const next = sortedChildren[i + 1];
+            // 実際の React Flow のエッジには表示されないが、Dagre には計算させる
+            dagreGraph.setEdge(current.id, next.id, { weight: 10, minlen: 0 });
+        }
     });
 
     visibleEdges.forEach((edge) => {
         const minlen = edgeMinLens.get(edge.target) || 1;
-        dagreGraph.setEdge(edge.source, edge.target, { minlen });
+        // 既存の実際の親子エッジを設定（子の表示順を担保するため weight を少し下げる）
+        dagreGraph.setEdge(edge.source, edge.target, { minlen, weight: 1 });
     });
 
     dagre.layout(dagreGraph);

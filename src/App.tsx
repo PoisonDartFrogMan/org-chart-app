@@ -281,11 +281,49 @@ function Flow() {
     setSelectedNode(null);
   }, []);
 
+  // Auto load from Cloud on mount
+  useEffect(() => {
+    const autoLoad = async () => {
+      if (!db) return;
+      try {
+        const { doc, getDoc } = await import('firebase/firestore');
+        const docSnap = await getDoc(doc(db, 'org_charts', 'master'));
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.nodes) setNodes(data.nodes);
+          if (data.edges) setEdges(data.edges);
+          if (data.layoutDirection) setLayoutDirection(data.layoutDirection);
+          if (data.roles) setRoles(data.roles);
+        }
+      } catch (err) {
+        console.error("Auto load failed:", err);
+      }
+    };
+    autoLoad();
+  }, [setNodes, setEdges]);
+
   const handleCsvImport = useCallback(
     (importedNodes: Node[], importedEdges: Edge[]) => {
+      takeSnapshot();
+
+      // Merge Nodes
+      const existingNodesMap = new Map(nodes.map(n => [n.id, n]));
+      importedNodes.forEach(newN => {
+        // overwrite existing by ID or add new
+        existingNodesMap.set(newN.id, newN);
+      });
+      const mergedNodes = Array.from(existingNodesMap.values());
+
+      // Merge Edges
+      const existingEdgesMap = new Map(edges.map(e => [e.id, e]));
+      importedEdges.forEach(newE => {
+        existingEdgesMap.set(newE.id, newE);
+      });
+      const mergedEdges = Array.from(existingEdgesMap.values());
+
       const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
-        importedNodes,
-        importedEdges,
+        mergedNodes,
+        mergedEdges,
         layoutDirection,
         roles
       );
@@ -304,10 +342,10 @@ function Flow() {
 
       // フィットビューを少し遅延させて実行する
       setTimeout(() => {
-        if (reactFlowInstance) reactFlowInstance.fitView({ padding: 0.2 });
+        if (reactFlowInstance) reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
       }, 50);
     },
-    [layoutDirection, reactFlowInstance, setNodes, setEdges]
+    [layoutDirection, reactFlowInstance, setNodes, setEdges, roles, nodes, edges, takeSnapshot]
   );
 
   const toggleLayout = useCallback(() => {
@@ -437,7 +475,7 @@ function Flow() {
     }
     try {
       const { doc, setDoc } = await import('firebase/firestore');
-      await setDoc(doc(db, 'org-charts', 'default-chart'), {
+      await setDoc(doc(db, 'org_charts', 'master'), {
         nodes,
         edges,
         layoutDirection,
@@ -458,7 +496,7 @@ function Flow() {
     }
     try {
       const { doc, getDoc } = await import('firebase/firestore');
-      const docSnap = await getDoc(doc(db, 'org-charts', 'default-chart'));
+      const docSnap = await getDoc(doc(db, 'org_charts', 'master'));
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.nodes) setNodes(data.nodes);
