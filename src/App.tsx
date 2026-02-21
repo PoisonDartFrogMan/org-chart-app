@@ -820,7 +820,7 @@ function Flow() {
               onInit={setReactFlowInstance}
               onDrop={onDrop}
               onDragOver={onDragOver}
-              onNodeDragStart={() => takeSnapshot()}
+              onNodeDragStop={() => takeSnapshot()}
               onNodeClick={onNodeClick}
               onPaneClick={onPaneClick}
               nodeTypes={nodeTypes}
