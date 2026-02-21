@@ -123,7 +123,43 @@ function Flow() {
   }, [onNodesChange, takeSnapshot]);
 
   const handleEdgesChange = useCallback((changes: any[]) => {
-    if (changes.some(c => c.type === 'remove')) takeSnapshot();
+    if (changes.some(c => c.type === 'remove')) {
+      takeSnapshot();
+      // Handle edge removal by detaching parentId and converting relative to absolute coords
+      const removedEdgeIds = new Set(changes.filter(c => c.type === 'remove').map(c => c.id));
+      const removedEdges = edgesRef.current.filter(e => removedEdgeIds.has(e.id));
+
+      if (removedEdges.length > 0) {
+        setNodes((nds) => {
+          // pre-calculate absolute positions just in case
+          const absPosMap = new Map<string, { x: number; y: number }>();
+          nds.forEach((n) => {
+            if (!n.parentId) {
+              absPosMap.set(n.id, { x: n.position.x, y: n.position.y });
+            }
+          });
+          nds.forEach((n) => {
+            if (n.parentId) {
+              const pPos = absPosMap.get(n.parentId) || { x: 0, y: 0 };
+              absPosMap.set(n.id, { x: pPos.x + n.position.x, y: pPos.y + n.position.y });
+            }
+          });
+
+          return nds.map((node) => {
+            const detachedEdge = removedEdges.find(e => e.target === node.id);
+            if (detachedEdge && node.parentId === detachedEdge.source) {
+              const absolutePosition = absPosMap.get(node.id) || node.position;
+              return {
+                ...node,
+                parentId: undefined,
+                position: absolutePosition,
+              };
+            }
+            return node;
+          });
+        });
+      }
+    }
     onEdgesChange(changes);
   }, [onEdgesChange, takeSnapshot]);
 
@@ -184,66 +220,22 @@ function Flow() {
 
   }, [setNodes, setEdges, reactFlowInstance, takeSnapshot]);
 
-  // Update nodes with hasChildren, onToggleCollapse, and parentNode logic
+  // Update nodes with hasChildren, onToggleCollapse only
   useEffect(() => {
     const childrenMap: Record<string, boolean> = {};
-    const parentMap: Record<string, string> = {}; // どの子がどの親に属するかを記録
 
     edges.forEach((e) => {
       childrenMap[e.source] = true;
-      parentMap[e.target] = e.source;
     });
 
     setNodes((nds) => {
       let changed = false;
 
-      // 現在のすべてのノードの絶対座標をマップ化（parentNode 計算用）
-      // すでに parentNode がある場合は、親の絶対座標を足して絶対座標を復元する
-      const absPosMap = new Map<string, { x: number; y: number }>();
-
-      // まずは親（parentIdを持たないノード）の絶対座標を記録
-      nds.forEach((n) => {
-        if (!n.parentId) {
-          absPosMap.set(n.id, { x: n.position.x, y: n.position.y });
-        }
-      });
-      // 次に子（parentIdを持つノード）の絶対座標を計算して記録（再起的な階層は浅いと仮定）
-      nds.forEach((n) => {
-        if (n.parentId) {
-          const pPos = absPosMap.get(n.parentId) || { x: 0, y: 0 };
-          absPosMap.set(n.id, { x: pPos.x + n.position.x, y: pPos.y + n.position.y });
-        }
-      });
-
       const nextNodes = nds.map((node) => {
         const hasChildren = !!childrenMap[node.id];
         const isCollapsed = !!collapsedNodes[node.id];
-        const newParentNode = parentMap[node.id];
-
-        let newPosition = node.position;
-        let parentChanged = false;
-
-        if (node.parentId !== newParentNode) {
-          parentChanged = true;
-          changed = true;
-          // 親が変わる、あるいは新しく親が設定される/外れる場合の座標補正
-          const myAbs = absPosMap.get(node.id) || node.position;
-
-          if (newParentNode) {
-            // 親が設定された場合、自身の相対座標 = 自身の絶対座標 - 新しい親の絶対座標
-            const newParentAbs = absPosMap.get(newParentNode) || { x: 0, y: 0 };
-            newPosition = {
-              x: myAbs.x - newParentAbs.x,
-              y: myAbs.y - newParentAbs.y,
-            };
-          } else {
-            // 親が外れた場合、現在の絶対座標をそのまま position として使用
-            newPosition = { ...myAbs };
-          }
-        }
 
         if (
-          parentChanged ||
           node.data.hasChildren !== hasChildren ||
           node.data.isCollapsed !== isCollapsed ||
           typeof node.data.onToggleCollapse !== 'function'
@@ -251,8 +243,6 @@ function Flow() {
           changed = true;
           return {
             ...node,
-            parentId: newParentNode,
-            position: newPosition, // parentChanged時のみ相対/絶対補正された座標になる
             data: {
               ...node.data,
               hasChildren,
@@ -283,9 +273,42 @@ function Flow() {
   const onConnect = useCallback(
     (params: Connection | Edge) => {
       takeSnapshot();
+
+      // Update the child's coordinate and parentId dynamically upon connection
+      setNodes((nds) => {
+        const absPosMap = new Map<string, { x: number; y: number }>();
+        nds.forEach((n) => {
+          if (!n.parentId) {
+            absPosMap.set(n.id, { ...n.position });
+          }
+        });
+        nds.forEach((n) => {
+          if (n.parentId) {
+            const pPos = absPosMap.get(n.parentId) || { x: 0, y: 0 };
+            absPosMap.set(n.id, { x: pPos.x + n.position.x, y: pPos.y + n.position.y });
+          }
+        });
+
+        return nds.map(n => {
+          if (n.id === params.target) {
+            const myAbs = absPosMap.get(params.target) || n.position;
+            const parentAbs = absPosMap.get(params.source) || { x: 0, y: 0 };
+            return {
+              ...n,
+              parentId: params.source,
+              position: {
+                x: myAbs.x - parentAbs.x,
+                y: myAbs.y - parentAbs.y
+              }
+            };
+          }
+          return n;
+        });
+      });
+
       setEdges((eds) => addEdge({ ...params, type: 'deletable', animated: true }, eds));
     },
-    [setEdges, takeSnapshot],
+    [setEdges, setNodes, takeSnapshot],
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
